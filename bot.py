@@ -20,6 +20,10 @@ COURSES = {
     "other":     {"name": "🌟 Other Courses",         "desc": "📓 Other Courses\n\n✅ Coding & Marketing\n✅ Stock Market\n✅ Spoken English\n✅ Personality Dev\n"},
 }
 
+# ── Global dict to track which users are awaiting feedback ──
+# Key: user_id (int), Value: True/False
+AWAITING_FEEDBACK: dict[int, bool] = {}
+
 # ──────────────────────────────────────────
 # Keyboards
 # ──────────────────────────────────────────
@@ -33,12 +37,11 @@ def home_keyboard():
         [InlineKeyboardButton(COURSES["other"]["name"],     callback_data="course_other")],
     ])
 
-def post_delivery_keyboard(user_id: int):
-    """Keyboard shown after admin sends course link."""
+def post_delivery_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("😊 Thanks! Maza Aa Gaya!",      callback_data=f"thanks_{user_id}")],
-        [InlineKeyboardButton("💬 Feedback / Comment Likhna",  callback_data=f"askfeedback_{user_id}")],
-        [InlineKeyboardButton("❌ Course Nahi Mila Mujhe",     callback_data=f"notreceived_{user_id}")],
+        [InlineKeyboardButton("😊 Thanks! Maza Aa Gaya!",     callback_data="thanks")],
+        [InlineKeyboardButton("💬 Feedback / Comment Likhna", callback_data="askfeedback")],
+        [InlineKeyboardButton("❌ Course Nahi Mila Mujhe",    callback_data="notreceived")],
     ])
 
 # ──────────────────────────────────────────
@@ -133,7 +136,6 @@ async def admin_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not target_id:
         return
     try:
-        # Send course link to user WITH post-delivery keyboard
         await ctx.bot.send_message(
             int(target_id),
             "🎉 Payment Verified! Course Access Mila!\n\n"
@@ -142,7 +144,7 @@ async def admin_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━━\n"
             "Happy Learning! ✅\n\n"
             "Kya aapko course mila? Feedback do 👇",
-            reply_markup=post_delivery_keyboard(int(target_id)),
+            reply_markup=post_delivery_keyboard(),
         )
         await update.message.reply_text(f"✅ User {target_id} ko link bhej diya!")
     except Exception as e:
@@ -151,22 +153,26 @@ async def admin_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.bot_data.pop("pending_send", None)
 
 # ──────────────────────────────────────────
-# NEW: Ask Feedback Handler (button press)
+# Post-delivery: Ask Feedback button
 # ──────────────────────────────────────────
 
 async def ask_feedback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """User pressed 'Feedback likhna' button — set flag and prompt."""
     query = update.callback_query
     await query.answer()
-    await query.message.edit_reply_markup(reply_markup=None)  # Remove keyboard
-    ctx.user_data["awaiting_feedback"] = True
+    user_id = query.from_user.id
+
+    # Store in module-level dict — works reliably across all handler types
+    AWAITING_FEEDBACK[user_id] = True
+    logging.info(f"[FEEDBACK] awaiting_feedback set for user_id={user_id}")
+
+    await query.message.edit_reply_markup(reply_markup=None)
     await query.message.reply_text(
         "✍️ Apna feedback ya comment neeche type karo:\n\n"
         "(Course kaisa laga? Koi problem? Koi suggestion?)"
     )
 
 # ──────────────────────────────────────────
-# NEW: Thanks Handler
+# Post-delivery: Thanks button
 # ──────────────────────────────────────────
 
 async def handle_thanks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -182,21 +188,19 @@ async def handle_thanks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Agar aur koi course chahiye toh /start karo.\n\n"
         "Apne doston ko bhi batao! 😊"
     )
-
-    # Notify admin
     try:
         await ctx.bot.send_message(
             ADMIN_ID,
-            f"😊 Thanks Message Mila!\n"
+            "😊 Thanks Message Mila!\n"
             f"User  : {user.full_name} ({uname})\n"
             f"ID    : {user.id}\n"
-            f"Status: Khush hai ✅"
+            "Status: Khush hai ✅"
         )
     except Exception as e:
         logging.warning(f"Thanks admin alert failed: {e}")
 
 # ──────────────────────────────────────────
-# NEW: Course Not Received Handler
+# Post-delivery: Course Not Received button
 # ──────────────────────────────────────────
 
 async def handle_not_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -212,12 +216,10 @@ async def handle_not_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "15 minute mein aapko course link milega.\n\n"
         "Agar tab bhi nahi mila toh /start karke dobara try karo."
     )
-
-    # Alert admin urgently
     try:
         await ctx.bot.send_message(
             ADMIN_ID,
-            f"🚨 Course Nahi Mila — Complaint!\n"
+            "🚨 Course Nahi Mila — Complaint!\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"Name    : {user.full_name}\n"
             f"Username: {uname}\n"
@@ -229,44 +231,45 @@ async def handle_not_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         logging.warning(f"Not-received admin alert failed: {e}")
 
 # ──────────────────────────────────────────
-# NEW: Text Feedback Handler (typed comment)
+# Text message handler (users only)
 # ──────────────────────────────────────────
 
-async def handle_text_feedback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Only collect feedback when user has pressed the feedback button first."""
+async def handle_user_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    user_id = user.id
     uname = f"@{user.username}" if user.username else "(username nahi hai)"
 
-    # Only process if we're awaiting feedback from this user
-    if not ctx.user_data.get("awaiting_feedback"):
+    logging.info(f"[TEXT] from user_id={user_id}, awaiting={AWAITING_FEEDBACK.get(user_id)}")
+
+    if AWAITING_FEEDBACK.get(user_id):
+        # ✅ This is a feedback message
+        feedback_text = update.message.text
+        AWAITING_FEEDBACK[user_id] = False  # Reset flag
+
+        await update.message.reply_text(
+            "✅ Aapka feedback mil gaya! Bahut shukriya 🙏\n\n"
+            "Hum isko improve karne mein zaroor use karenge.\n"
+            "Koi aur course chahiye toh /start karo! 📚"
+        )
+        try:
+            await ctx.bot.send_message(
+                ADMIN_ID,
+                "💬 User Feedback Aaya!\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"Name    : {user.full_name}\n"
+                f"Username: {uname}\n"
+                f"User ID : {user_id}\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"Feedback:\n{feedback_text}"
+            )
+            logging.info(f"[FEEDBACK] Sent to admin from user_id={user_id}")
+        except Exception as e:
+            logging.warning(f"Feedback admin send failed: {e}")
+    else:
+        # Not in feedback mode — guide them
         await update.message.reply_text(
             "Koi bhi course lene ke liye /start karo 😊"
         )
-        return
-
-    feedback_text = update.message.text
-    ctx.user_data["awaiting_feedback"] = False  # Reset flag
-
-    await update.message.reply_text(
-        "✅ Aapka feedback mil gaya! Bahut shukriya 🙏\n\n"
-        "Hum isko improve karne mein zaroor use karenge.\n"
-        "Koi aur course chahiye toh /start karo! 📚"
-    )
-
-    # Forward feedback to admin
-    try:
-        await ctx.bot.send_message(
-            ADMIN_ID,
-            "💬 User Feedback Aaya!\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"Name    : {user.full_name}\n"
-            f"Username: {uname}\n"
-            f"User ID : {user.id}\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"Feedback:\n{feedback_text}"
-        )
-    except Exception as e:
-        logging.warning(f"Feedback admin alert failed: {e}")
 
 async def reject_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -279,7 +282,7 @@ async def reject_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user_id,
             "❌ Payment Verify Nahi Huyi!\nDobara /start karke try karein."
         )
-    except:
+    except Exception:
         pass
     await update.message.reply_text(f"User {user_id} reject kiya.")
 
@@ -301,25 +304,25 @@ def main():
     app.add_handler(CommandHandler("reject", reject_cmd))
 
     # Course flow
-    app.add_handler(CallbackQueryHandler(course_selected,    pattern="^course_"))
-    app.add_handler(CallbackQueryHandler(done_payment,       pattern="^done_"))
-    app.add_handler(CallbackQueryHandler(back_home,          pattern="^back_home$"))
+    app.add_handler(CallbackQueryHandler(course_selected,     pattern="^course_"))
+    app.add_handler(CallbackQueryHandler(done_payment,        pattern="^done_"))
+    app.add_handler(CallbackQueryHandler(back_home,           pattern="^back_home$"))
 
-    # Post-delivery feedback callbacks
-    app.add_handler(CallbackQueryHandler(ask_feedback,        pattern="^askfeedback_"))
-    app.add_handler(CallbackQueryHandler(handle_thanks,       pattern="^thanks_"))
-    app.add_handler(CallbackQueryHandler(handle_not_received, pattern="^notreceived_"))
+    # Post-delivery feedback buttons
+    app.add_handler(CallbackQueryHandler(ask_feedback,        pattern="^askfeedback$"))
+    app.add_handler(CallbackQueryHandler(handle_thanks,       pattern="^thanks$"))
+    app.add_handler(CallbackQueryHandler(handle_not_received, pattern="^notreceived$"))
 
-    # Admin forward (must stay BEFORE user text handler)
+    # Admin text (course link sending) — MUST be before user text handler
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID),
         admin_forward
     ))
 
-    # NEW: User text feedback (non-admin users)
+    # User text (feedback or default reply)
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID),
-        handle_text_feedback
+        handle_user_text
     ))
 
     print("Bot chal raha hai...")
