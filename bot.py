@@ -1,6 +1,6 @@
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, filters
@@ -20,9 +20,9 @@ COURSES = {
     "other":     {"name": "🌟 Other Courses",         "desc": "📓 Other Courses\n\n✅ Coding & Marketing\n✅ Stock Market\n✅ Spoken English\n✅ Personality Dev\n"},
 }
 
-# ── Global dict to track which users are awaiting feedback ──
-# Key: user_id (int), Value: True/False
+# ── Global state dicts ──
 AWAITING_FEEDBACK: dict[int, bool] = {}
+AWAITING_PHONE:    dict[int, str]  = {}  # user_id -> course_name (waiting for phone)
 
 # ──────────────────────────────────────────
 # Keyboards
@@ -36,6 +36,14 @@ def home_keyboard():
         [InlineKeyboardButton(COURSES["target"]["name"],    callback_data="course_target")],
         [InlineKeyboardButton(COURSES["other"]["name"],     callback_data="course_other")],
     ])
+
+def phone_keyboard():
+    """Show Telegram's native Share Phone Number button."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("📱 Apna Number Share Karo", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
 
 def post_delivery_keyboard():
     return InlineKeyboardMarkup([
@@ -92,7 +100,36 @@ async def done_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     key = query.data.replace("done_", "")
     course_name = COURSES.get(key, {}).get("name", key)
     user = query.from_user
+
+    # Save course name — needed when phone arrives
+    AWAITING_PHONE[user.id] = course_name
+
+    # Ask for phone number
+    await query.message.reply_text(
+        "✅ Payment confirm karne ke liye\n"
+        "apna Phone Number share karo 👇\n\n"
+        "Neeche wala button dabao:",
+        reply_markup=phone_keyboard(),
+    )
+
+async def receive_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Triggered when user shares their contact/phone number."""
+    user = update.effective_user
+    contact = update.message.contact
+    phone = contact.phone_number
+    course_name = AWAITING_PHONE.pop(user.id, "Unknown Course")
     uname = f"@{user.username}" if user.username else "(username nahi hai)"
+
+    # Remove the phone share keyboard
+    await update.message.reply_text(
+        "✅ Phone Number Mil Gaya!\n\n"
+        f"Course: {course_name}\n\n"
+        "Admin verify kar raha hai...\n"
+        "5-15 min mein Course Link aayega! 🎉",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    # Notify admin with full details including phone
     try:
         await ctx.bot.send_message(
             ADMIN_ID,
@@ -101,19 +138,15 @@ async def done_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Name    : {user.full_name}\n"
             f"User ID : {user.id}\n"
             f"Username: {uname}\n"
+            f"Phone   : {phone}\n"
             f"Course  : {course_name}\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"Link bhejne ke liye:\n/send {user.id}\n\n"
             f"Reject karne ke liye:\n/reject {user.id}"
         )
+        logging.info(f"[PHONE] Admin notified for user {user.id}, phone={phone}")
     except Exception as e:
-        logging.warning(f"Admin alert failed: {e}")
-    await query.message.reply_text(
-        "✅ Request Receive Ho Gayi!\n\n"
-        f"Course: {course_name}\n\n"
-        "Admin verify kar raha hai...\n"
-        "5-15 min mein Course Link aayega!"
-    )
+        logging.warning(f"Admin phone alert failed: {e}")
 
 async def send_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -153,34 +186,26 @@ async def admin_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.bot_data.pop("pending_send", None)
 
 # ──────────────────────────────────────────
-# Post-delivery: Ask Feedback button
+# Post-delivery callbacks
 # ──────────────────────────────────────────
 
 async def ask_feedback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-
-    # Store in module-level dict — works reliably across all handler types
     AWAITING_FEEDBACK[user_id] = True
     logging.info(f"[FEEDBACK] awaiting_feedback set for user_id={user_id}")
-
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.reply_text(
         "✍️ Apna feedback ya comment neeche type karo:\n\n"
         "(Course kaisa laga? Koi problem? Koi suggestion?)"
     )
 
-# ──────────────────────────────────────────
-# Post-delivery: Thanks button
-# ──────────────────────────────────────────
-
 async def handle_thanks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
     uname = f"@{user.username}" if user.username else "(username nahi hai)"
-
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.reply_text(
         "🙏 Shukriya! Aapka Dhanyawad!\n\n"
@@ -199,16 +224,11 @@ async def handle_thanks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.warning(f"Thanks admin alert failed: {e}")
 
-# ──────────────────────────────────────────
-# Post-delivery: Course Not Received button
-# ──────────────────────────────────────────
-
 async def handle_not_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
     uname = f"@{user.username}" if user.username else "(username nahi hai)"
-
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.reply_text(
         "😟 Oops! Sharmindagi ke liye maafi!\n\n"
@@ -231,21 +251,18 @@ async def handle_not_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         logging.warning(f"Not-received admin alert failed: {e}")
 
 # ──────────────────────────────────────────
-# Text message handler (users only)
+# User text handler (feedback mode)
 # ──────────────────────────────────────────
 
 async def handle_user_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     uname = f"@{user.username}" if user.username else "(username nahi hai)"
-
-    logging.info(f"[TEXT] from user_id={user_id}, awaiting={AWAITING_FEEDBACK.get(user_id)}")
+    logging.info(f"[TEXT] from user_id={user_id}, awaiting_feedback={AWAITING_FEEDBACK.get(user_id)}")
 
     if AWAITING_FEEDBACK.get(user_id):
-        # ✅ This is a feedback message
         feedback_text = update.message.text
-        AWAITING_FEEDBACK[user_id] = False  # Reset flag
-
+        AWAITING_FEEDBACK[user_id] = False
         await update.message.reply_text(
             "✅ Aapka feedback mil gaya! Bahut shukriya 🙏\n\n"
             "Hum isko improve karne mein zaroor use karenge.\n"
@@ -266,7 +283,6 @@ async def handle_user_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.warning(f"Feedback admin send failed: {e}")
     else:
-        # Not in feedback mode — guide them
         await update.message.reply_text(
             "Koi bhi course lene ke liye /start karo 😊"
         )
@@ -280,7 +296,8 @@ async def reject_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         await ctx.bot.send_message(
             user_id,
-            "❌ Payment Verify Nahi Huyi!\nDobara /start karke try karein."
+            "❌ Payment Verify Nahi Huyi!\nDobara /start karke try karein.",
+            reply_markup=ReplyKeyboardRemove(),
         )
     except Exception:
         pass
@@ -312,6 +329,9 @@ def main():
     app.add_handler(CallbackQueryHandler(ask_feedback,        pattern="^askfeedback$"))
     app.add_handler(CallbackQueryHandler(handle_thanks,       pattern="^thanks$"))
     app.add_handler(CallbackQueryHandler(handle_not_received, pattern="^notreceived$"))
+
+    # ✅ Phone number (contact) handler — fires when user shares contact
+    app.add_handler(MessageHandler(filters.CONTACT, receive_phone))
 
     # Admin text (course link sending) — MUST be before user text handler
     app.add_handler(MessageHandler(
