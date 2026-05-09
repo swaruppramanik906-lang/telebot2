@@ -36,13 +36,9 @@ def home_keyboard():
 def post_delivery_keyboard(user_id: int):
     """Keyboard shown after admin sends course link."""
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⭐ 5 Star",  callback_data=f"rate_5_{user_id}"),
-            InlineKeyboardButton("⭐ 4 Star",  callback_data=f"rate_4_{user_id}"),
-            InlineKeyboardButton("⭐ 3 Star",  callback_data=f"rate_3_{user_id}"),
-        ],
-        [InlineKeyboardButton("😊 Thanks! Maza Aa Gaya!",    callback_data=f"thanks_{user_id}")],
-        [InlineKeyboardButton("❌ Course Nahi Mila Mujhe",   callback_data=f"notreceived_{user_id}")],
+        [InlineKeyboardButton("😊 Thanks! Maza Aa Gaya!",      callback_data=f"thanks_{user_id}")],
+        [InlineKeyboardButton("💬 Feedback / Comment Likhna",  callback_data=f"askfeedback_{user_id}")],
+        [InlineKeyboardButton("❌ Course Nahi Mila Mujhe",     callback_data=f"notreceived_{user_id}")],
     ])
 
 # ──────────────────────────────────────────
@@ -155,36 +151,19 @@ async def admin_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.bot_data.pop("pending_send", None)
 
 # ──────────────────────────────────────────
-# NEW: Rating Handler
+# NEW: Ask Feedback Handler (button press)
 # ──────────────────────────────────────────
 
-async def handle_rating(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def ask_feedback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """User pressed 'Feedback likhna' button — set flag and prompt."""
     query = update.callback_query
     await query.answer()
-    parts = query.data.split("_")   # rate_5_userid
-    stars = int(parts[1])
-    user = query.from_user
-    uname = f"@{user.username}" if user.username else "(username nahi hai)"
-
-    star_emoji = "⭐" * stars
     await query.message.edit_reply_markup(reply_markup=None)  # Remove keyboard
+    ctx.user_data["awaiting_feedback"] = True
     await query.message.reply_text(
-        f"Shukriya! {star_emoji} Rating ke liye!\n\n"
-        "Aapka feedback humein behtar banata hai! 💪\n"
-        "Koi bhi problem ho toh /start karo."
+        "✍️ Apna feedback ya comment neeche type karo:\n\n"
+        "(Course kaisa laga? Koi problem? Koi suggestion?)"
     )
-
-    # Notify admin about rating
-    try:
-        await ctx.bot.send_message(
-            ADMIN_ID,
-            f"⭐ Naya Rating Mila!\n"
-            f"User  : {user.full_name} ({uname})\n"
-            f"ID    : {user.id}\n"
-            f"Rating: {star_emoji} ({stars}/5)"
-        )
-    except Exception as e:
-        logging.warning(f"Rating admin alert failed: {e}")
 
 # ──────────────────────────────────────────
 # NEW: Thanks Handler
@@ -250,27 +229,35 @@ async def handle_not_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         logging.warning(f"Not-received admin alert failed: {e}")
 
 # ──────────────────────────────────────────
-# NEW: Text Feedback Handler (after rating)
+# NEW: Text Feedback Handler (typed comment)
 # ──────────────────────────────────────────
 
 async def handle_text_feedback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Collect written feedback from users (when not admin)."""
-    if update.effective_user.id == ADMIN_ID:
-        return  # Let admin_forward handle admin messages
+    """Only collect feedback when user has pressed the feedback button first."""
     user = update.effective_user
     uname = f"@{user.username}" if user.username else "(username nahi hai)"
+
+    # Only process if we're awaiting feedback from this user
+    if not ctx.user_data.get("awaiting_feedback"):
+        await update.message.reply_text(
+            "Koi bhi course lene ke liye /start karo 😊"
+        )
+        return
+
     feedback_text = update.message.text
+    ctx.user_data["awaiting_feedback"] = False  # Reset flag
 
     await update.message.reply_text(
-        "✅ Aapka feedback mil gaya! Shukriya 🙏\n"
-        "Hum isko improve karne mein use karenge."
+        "✅ Aapka feedback mil gaya! Bahut shukriya 🙏\n\n"
+        "Hum isko improve karne mein zaroor use karenge.\n"
+        "Koi aur course chahiye toh /start karo! 📚"
     )
 
     # Forward feedback to admin
     try:
         await ctx.bot.send_message(
             ADMIN_ID,
-            f"💬 User Feedback Aaya!\n"
+            "💬 User Feedback Aaya!\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"Name    : {user.full_name}\n"
             f"Username: {uname}\n"
@@ -318,9 +305,9 @@ def main():
     app.add_handler(CallbackQueryHandler(done_payment,       pattern="^done_"))
     app.add_handler(CallbackQueryHandler(back_home,          pattern="^back_home$"))
 
-    # NEW: Post-delivery feedback callbacks
-    app.add_handler(CallbackQueryHandler(handle_rating,      pattern="^rate_"))
-    app.add_handler(CallbackQueryHandler(handle_thanks,      pattern="^thanks_"))
+    # Post-delivery feedback callbacks
+    app.add_handler(CallbackQueryHandler(ask_feedback,        pattern="^askfeedback_"))
+    app.add_handler(CallbackQueryHandler(handle_thanks,       pattern="^thanks_"))
     app.add_handler(CallbackQueryHandler(handle_not_received, pattern="^notreceived_"))
 
     # Admin forward (must stay BEFORE user text handler)
