@@ -163,6 +163,29 @@ async def send_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def admin_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
+
+    # ── Reply/solution mode ──
+    if ctx.user_data.get("admin_replying"):
+        target_id = ctx.bot_data.get("pending_reply")
+        if not target_id:
+            return
+        try:
+            await ctx.bot.send_message(
+                int(target_id),
+                "📩 Admin ka Reply Aaya!\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                + update.message.text +
+                "\n━━━━━━━━━━━━━━━━━━━━\n"
+                "Koi aur sawaal ho toh /start karo 😊"
+            )
+            await update.message.reply_text(f"✅ User {target_id} ko solution bhej diya!")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+        ctx.user_data["admin_replying"] = False
+        ctx.bot_data.pop("pending_reply", None)
+        return
+
+    # ── Send course link mode ──
     if not ctx.user_data.get("admin_sending"):
         return
     target_id = ctx.bot_data.get("pending_send")
@@ -277,7 +300,9 @@ async def handle_user_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"Username: {uname}\n"
                 f"User ID : {user_id}\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                f"Feedback:\n{feedback_text}"
+                f"Feedback:\n{feedback_text}\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"Reply/Solution bhejne ke liye:\n/reply {user_id}"
             )
             logging.info(f"[FEEDBACK] Sent to admin from user_id={user_id}")
         except Exception as e:
@@ -286,6 +311,20 @@ async def handle_user_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Koi bhi course lene ke liye /start karo 😊"
         )
+
+
+async def reply_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin types /reply USER_ID then writes solution — sent to user."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: /reply USER_ID")
+        return
+    ctx.bot_data["pending_reply"] = ctx.args[0]
+    ctx.user_data["admin_replying"] = True
+    await update.message.reply_text(
+        f"User {ctx.args[0]} ke feedback ka solution likhao 👇"
+    )
 
 async def reject_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -319,6 +358,7 @@ def main():
     app.add_handler(CommandHandler("start",  start))
     app.add_handler(CommandHandler("send",   send_cmd))
     app.add_handler(CommandHandler("reject", reject_cmd))
+    app.add_handler(CommandHandler("reply",  reply_cmd))
 
     # Course flow
     app.add_handler(CallbackQueryHandler(course_selected,     pattern="^course_"))
