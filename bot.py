@@ -51,7 +51,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Namaste! Paid Course Bot mein swagat hai!\n\n"
         "Apna Course chunein 👇\n\n"
-        "Sirf Rs.49 mein Access paayein!\n"
+        "Sirf Rs.89 mein Access paayein!\n"
         "Payment ke baad Done button dabayein ✅",
         reply_markup=home_keyboard(),
     )
@@ -68,10 +68,10 @@ async def course_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{course['desc']}\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Payment Details:\n\n"
-        "Amount: Rs.49 only\n\n"
+        "Amount: Rs.89 only\n\n"
         "Steps:\n"
         "1. QR Scan karo ya UPI ID use karo\n"
-        "2. Rs.49 pay karo\n"
+        "2. Rs.89 pay karo\n"
         "3. Done button dabao\n"
         "4. Admin Course Link bhejega\n"
         "━━━━━━━━━━━━━━━━━━━━"
