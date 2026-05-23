@@ -6,7 +6,7 @@ from telegram.ext import (
     MessageHandler, ContextTypes, filters
 )
 
-BOT_TOKEN   = os.environ.get("BOT_TOKEN",   "8770256514:AAFboeG9vVOS987Nz9zXIZhwtsiVPySRC5U")
+BOT_TOKEN   = os.environ.get("BOT_TOKEN",   "8952322827:AAFP2umL50eE97D6CuQlaYnLG3ZevumdBiM")
 ADMIN_ID    = int(os.environ.get("ADMIN_ID", "6901201338"))
 QR_CODE_URL = os.environ.get("QR_CODE_URL", "https://i.ibb.co/TMZ4tpf8/6337116742676582273.jpg")
 
